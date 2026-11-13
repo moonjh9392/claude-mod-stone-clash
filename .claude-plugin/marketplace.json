@@ -1,0 +1,5 @@
+{
+  "name": "claude-mod-stone-clash",
+  "owner": { "name": "moonjh9392" },
+  "plugins": [{ "name": "stone-clash", "source": "./" }]
+}
