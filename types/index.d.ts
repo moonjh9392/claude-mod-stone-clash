@@ -2,25 +2,24 @@ export type Screen = 'menu' | 'themes' | 'stages' | 'battle' | 'gacha' | 'bag'
 
 export type Game = {
   screen: Screen
-  /** 테마 번호 0~4 (난이도 순: 물·불·나무·땅·전기) */
+  /** 테마 번호 0~9 (0~4 기본, 5~9 심화. 각각 물·불·나무·땅·전기 순) */
   theme: number
   /** 테마 안 스테이지 1~7 */
   stage: number
   board: number[]
   sel: number | null
-  /** 몬스터 체력 */
-  hp: number
-  maxHp: number
-  monEl: number
+  /** 먼저 때릴 몬스터 번호 */
+  target: number
+  /** 몬스터별 체력·최대 체력·속성·공격력·공격 주기·공격까지 남은 턴 (1~3마리) */
+  mHp: number[]
+  mMax: number[]
+  mEl: number[]
+  mAtk: number[]
+  mEvery: number[]
+  mIn: number[]
   /** 내 체력: 스테이지마다 가득 찬 채로 시작 */
   php: number
   pmaxHp: number
-  /** 몬스터 공격력 */
-  atk: number
-  /** 몇 턴마다 공격하는가 */
-  atkEvery: number
-  /** 공격까지 남은 턴 */
-  atkIn: number
   log: string
   /** 사망 */
   over: boolean

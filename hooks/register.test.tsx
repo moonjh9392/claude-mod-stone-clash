@@ -2,8 +2,9 @@ import { expect, test } from 'claude-code/testing'
 
 import type { Game } from '../types'
 import {
-  damageOf, findRuns, fresh, gacha, GRADE_RATE, hasMove, ITEM_COUNT, itemOf, loaded, plan, press, PULL_COST,
+  aim, applyHit, damageOf, findRuns, fresh, gacha, GRADE_RATE, hasMove, ITEM_COUNT, itemOf, loaded, plan, press, PULL_COST,
   resolve, rewardOf, startBattle, statsOf, toggleEquip,
+  hurtOf, THEME_COUNT,
 } from './register'
 
 const PANE = {
@@ -83,8 +84,9 @@ const ready = () => {
 }
 const base: Game = {
   ...fresh(), screen: 'battle', theme: 3, stage: 2,
-  board: ready(), hp: 100000, maxHp: 100000, monEl: 2,
-  php: 100, pmaxHp: 100, atk: 18, atkEvery: 3, atkIn: 3,
+  board: ready(), target: 0,
+  mHp: [100000], mMax: [100000], mEl: [2], mAtk: [18], mEvery: [3], mIn: [3],
+  php: 100, pmaxHp: 100,
 }
 const hitOnce = (g: Game) => plan(press({ ...g, board: ready() }, at(0, 2)), at(1, 2))
 
@@ -92,12 +94,12 @@ test('돌을 맞추면 데미지가 들어가고 공격 턴이 가까워진다',
   expect(findRuns(base.board).length).toBe(0)
   expect(hasMove(base.board)).toBe(true)
   const p = hitOnce(base)
-  expect(p.final.atkIn).toBe(2)
+  expect(p.final.mIn[0]).toBe(2)
   expect(p.final.php).toBe(100)
-  expect(p.final.hp < 100000).toBe(true)
+  expect((p.final.mHp[0] as number) < 100000).toBe(true)
   // 프레임: 교환 → 반짝임 → 사라짐(데미지) → 낙하, 프레임 데미지 합 = 총 데미지
   expect(p.frames[1]?.flash.length).toBe(3)
-  expect(p.frames.reduce((a, f) => a + f.hit, 0)).toBe(100000 - p.final.hp)
+  expect(p.frames.reduce((a, f) => a + f.hit, 0)).toBe(100000 - (p.final.mHp[0] as number))
   expect(p.frames.reduce((a, f) => a + f.hurt, 0)).toBe(0)
   // 재생 중에는 입력을 받지 않는다
   expect(plan({ ...base, busy: true }, 2).final.sel).toBe(null)
@@ -106,33 +108,33 @@ test('돌을 맞추면 데미지가 들어가고 공격 턴이 가까워진다',
   const kept = plan(press({ ...base, board: q }, 0), 1)
   expect(kept.final.board[0]).toBe(q[1])
   expect(kept.final.board[1]).toBe(q[0])
-  expect(kept.final.hp).toBe(100000)
-  expect(kept.final.atkIn).toBe(2)
+  expect(kept.final.mHp[0]).toBe(100000)
+  expect(kept.final.mIn[0]).toBe(2)
   expect(resolve(quiet(), 2).total).toBe(0)
 })
 
 test('3턴 몬스터는 세 번째 맞춤 뒤에 공격한다', async () => {
   const one = hitOnce(base).final
   const two = hitOnce(one).final
-  expect(two.atkIn).toBe(1)
+  expect(two.mIn[0]).toBe(1)
   expect(two.php).toBe(100)
   const three = hitOnce(two)
   expect(three.final.php).toBe(82)
-  expect(three.final.atkIn).toBe(3)
+  expect(three.final.mIn[0]).toBe(3)
   expect(three.frames[three.frames.length - 1]?.hurt).toBe(18)
   // 체력이 다 깎이면 사망, 더 누를 수 없다
-  const dead = hitOnce({ ...base, php: 10, atkIn: 1 }).final
+  const dead = hitOnce({ ...base, php: 10, mIn: [1] }).final
   expect(dead.php).toBe(0)
   expect(dead.over).toBe(true)
   expect(press(dead, 5).sel).toBe(null)
   // 공격 턴에 몬스터를 잡으면 맞지 않고 클리어. 첫 클리어는 보상 2배, 다시 깨면 1배
-  const win = hitOnce({ ...base, hp: 1, php: 50, atkIn: 1, cleared: [0, 0, 0, 1, 0] }).final
+  const win = hitOnce({ ...base, mHp: [1], php: 50, mIn: [1], cleared: [0, 0, 0, 1, 0, 0, 0, 0, 0, 0] }).final
   expect(win.won).toBe(true)
   expect(win.php).toBe(50)
-  expect(win.cleared.join()).toBe('0,0,0,2,0')
+  expect(win.cleared.join()).toBe('0,0,0,2,0,0,0,0,0,0')
   expect(win.coins).toBe(base.coins + rewardOf(3, 2) * 2)
   expect(press(win, 5).sel).toBe(null)
-  const again = hitOnce({ ...base, hp: 1, cleared: [0, 0, 0, 7, 0] }).final
+  const again = hitOnce({ ...base, mHp: [1], cleared: [0, 0, 0, 7, 0, 0, 0, 0, 0, 0] }).final
   expect(again.coins).toBe(base.coins + rewardOf(3, 2))
 })
 
@@ -179,23 +181,77 @@ test('아이템 200종·뽑기·장착·저장', async () => {
   // 장착 효과: 체력이 늘고, 데미지가 늘고, 받는 피해가 준다
   const fight = startBattle(g, 0, 1)
   expect(fight.pmaxHp).toBe(100 + gear.hp)
-  expect(fight.monEl).toBe(0)
+  expect(fight.mEl.join()).toBe('0')
   const plain = hitOnce(base)
   const strong = hitOnce({ ...base, equip: g.equip })
-  expect(100000 - strong.final.hp > 100000 - plain.final.hp).toBe(true)
-  const hurt = hitOnce({ ...base, equip: g.equip, atkIn: 1 }).final
-  expect(100 - hurt.php).toBe(Math.max(1, 18 - gear.def))
+  expect((strong.final.mHp[0] as number) < (plain.final.mHp[0] as number)).toBe(true)
+  const hurt = hitOnce({ ...base, equip: g.equip, mIn: [1] }).final
+  expect(100 - hurt.php).toBe(hurtOf(18, gear.def))
+  // 방어가 아무리 높아도 공격력의 40% 는 받는다
+  expect(hurtOf(18, 999)).toBe(8)
+  expect(hurtOf(18, 3)).toBe(15)
   // 1스테이지는 쉽고, 뒤로 갈수록 세다
-  expect(startBattle(fresh(), 0, 1).maxHp).toBe(110)
-  expect(startBattle(fresh(), 4, 7).maxHp > 2000).toBe(true)
+  expect(startBattle(fresh(), 0, 1).mMax.join()).toBe('110')
+  expect((startBattle(fresh(), 4, 7).mMax[0] as number) > 2000).toBe(true)
 
   // 저장한 값을 다시 읽는다. 이상한 값은 버린다
   const back = loaded(fresh(), { coins: 77, cleared: [7, 3, 0, 0, 0], owned: [1, 999, 5], equip: [5, 9] })
   expect(back.coins).toBe(77)
-  expect(back.cleared.join()).toBe('7,3,0,0,0')
+  expect(back.cleared.join()).toBe('7,3,0,0,0,0,0,0,0,0')
   expect(back.owned.join()).toBe('1,5')
   expect(back.equip.join()).toBe('5')
   expect(loaded(fresh(), 3).coins).toBe(fresh().coins)
+})
+
+test('심화 테마: 몬스터 여러 마리, 속성이 다르고, 때릴 대상을 고른다', async () => {
+  expect(THEME_COUNT).toBe(10)
+  expect(fresh().cleared.length).toBe(10)
+  // 심화 1~2 스테이지는 2마리, 그 뒤는 3마리. 속성은 모두 다르다
+  expect(startBattle(fresh(), 5, 1).mEl.length).toBe(2)
+  for (let theme = 5; theme < 10; theme++) {
+    for (let stage = 3; stage <= 7; stage++) {
+      const b = startBattle(fresh(), theme, stage)
+      expect(b.mEl.length).toBe(3)
+      expect(new Set(b.mEl).size).toBe(3)
+      expect(b.mHp.join()).toBe(b.mMax.join())
+    }
+  }
+  // 기본 마지막보다 심화 처음이 더 세다(체력 합)
+  const sum = (list: number[]) => list.reduce((a, b) => a + b, 0)
+  expect(sum(startBattle(fresh(), 5, 1).mMax) > sum(startBattle(fresh(), 4, 6).mMax)).toBe(true)
+  expect(sum(startBattle(fresh(), 9, 7).mMax) > sum(startBattle(fresh(), 5, 7).mMax)).toBe(true)
+
+  // 남은 데미지는 다음 몬스터로 넘어간다
+  expect(applyHit([50, 40, 30], 1, 60).join()).toBe('30,0,30')
+  expect(applyHit([50, 40, 30], 2, 10).join()).toBe('50,40,20')
+  expect(applyHit([5, 5], 0, 999).join()).toBe('0,0')
+
+  const trio: Game = {
+    ...base, theme: 5, stage: 3,
+    mHp: [100000, 100000, 100000], mMax: [100000, 100000, 100000], mEl: [0, 1, 3],
+    mAtk: [10, 20, 30], mEvery: [3, 4, 5], mIn: [1, 2, 1],
+  }
+  // 고르기는 턴을 쓰지 않는다. 쓰러진 몬스터는 못 고른다
+  const picked = aim(trio, 2)
+  expect(picked.target).toBe(2)
+  expect(picked.mIn.join()).toBe('1,2,1')
+  expect(aim({ ...trio, mHp: [100000, 0, 100000] }, 1).target).toBe(0)
+  // 고른 몬스터만 맞고, 공격 턴이 된 둘이 함께 때린다. 나머지는 한 턴 가까워진다
+  const hit = hitOnce(picked).final
+  expect(hit.mHp[0]).toBe(100000)
+  expect(hit.mHp[1]).toBe(100000)
+  expect((hit.mHp[2] as number) < 100000).toBe(true)
+  expect(100 - hit.php).toBe(10 + 30)
+  expect(hit.mIn.join()).toBe('3,1,5')
+  // 고른 몬스터가 쓰러지면 다음 살아 있는 몬스터로 넘어가고, 쓰러진 몬스터는 공격하지 않는다
+  const fell = hitOnce({ ...trio, mHp: [1, 100000, 100000] }).final
+  expect(fell.mHp[0]).toBe(0)
+  expect(fell.target).toBe(1)
+  expect((fell.mHp[1] as number) < 100000).toBe(true)
+  expect(100 - fell.php).toBe(30)
+  expect(fell.won).toBe(false)
+  // 모두 쓰러뜨려야 클리어
+  expect(hitOnce({ ...trio, mHp: [1, 1, 1] }).final.won).toBe(true)
 })
 
 test('메뉴에서 테마·스테이지를 골라 36칸 판에 들어간다', async ($, on) => {
@@ -207,7 +263,7 @@ test('메뉴에서 테마·스테이지를 골라 36칸 판에 들어간다', as
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /🪙 500 · 클리어 2 \/ 35/ })) !== undefined).toBe(true)
+  expect((await ui.find({ type: 'Text', text: /🪙 500 · 클리어 2 \/ 70/ })) !== undefined).toBe(true)
   await ui.press({ key: 'gacha' })
   await ui.press({ key: 'pull-1' })
   expect((await ui.find({ type: 'Text', text: /🪙 440/ })) !== undefined).toBe(true)
@@ -223,5 +279,12 @@ test('메뉴에서 테마·스테이지를 골라 36칸 판에 들어간다', as
   expect((await ui.find({ type: 'Text', text: /약점 🟡 전기/ })) !== undefined).toBe(true)
   await ui.press({ key: 'cell-0' })
   await ui.press({ key: 'cell-35' })
+  // 심화 테마: 여러 마리가 나오고 눌러서 대상을 바꾼다
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'theme-5' })
+  await ui.press({ key: 'stage-1' })
+  expect((await ui.find({ type: 'Text', text: /심연의 물의 땅 1\/7/ })) !== undefined).toBe(true)
+  await ui.press({ key: 'mon-1' })
   await ui.unmount()
 })
