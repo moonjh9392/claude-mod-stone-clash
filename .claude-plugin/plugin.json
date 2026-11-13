@@ -1,6 +1,6 @@
 {
   "name": "stone-clash",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Claude 가 작업하는 동안 패널에서 하는 5속성 돌 맞추기 턴제 퍼즐",
   "license": "MIT",
   "types": "./types/index.d.ts"

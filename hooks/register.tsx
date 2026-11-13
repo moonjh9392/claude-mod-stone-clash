@@ -8,11 +8,17 @@ const N = 6
 // 대각선은 4칸부터 줄로 친다(가로·세로는 3칸)
 const DIAGONAL_MIN = 4
 const KINDS = 5
-const PLAYER_HP = 100
 // 0 물 · 1 불 · 2 땅 · 3 나무 · 4 전기
 const STONE = ['🔵', '🔴', '🟤', '🟢', '🟡']
 const NAME = ['물', '불', '땅', '나무', '전기']
-const MONSTER = ['물안개 해파리', '화산 도롱뇽', '바위 거북', '넝쿨 사마귀', '번개 족제비']
+// 속성별 몬스터 7마리. 마지막이 보스
+const MONSTER = [
+  ['물방울 새우', '이슬 달팽이', '물안개 해파리', '여울 수달', '소용돌이 가오리', '심해 아귀', '해일 고래'],
+  ['불씨 나방', '숯 도마뱀', '화산 도롱뇽', '화염 여우', '용암 멧돼지', '잿불 독수리', '홍염 사자'],
+  ['조약돌 쥐', '진흙 두더지', '바위 거북', '모래 전갈', '암석 코뿔소', '협곡 곰', '대지 거인'],
+  ['새싹 다람쥐', '이끼 두꺼비', '넝쿨 사마귀', '가시 고슴도치', '고목 사슴', '덩굴 구렁이', '천년 수호목'],
+  ['정전기 참새', '스파크 생쥐', '번개 족제비', '뇌운 매', '전류 뱀장어', '천둥 늑대', '뇌신 호랑이'],
+]
 // BEATS[a] = a 가 이기는 속성: 물>불>나무>땅>전기>물
 const BEATS = [1, 3, 4, 2, 0]
 
@@ -111,8 +117,8 @@ function fallStep(board: number[]): number[] | null {
 // hit = 몬스터가 받는 데미지, hurt = 내가 받는 데미지(몬스터 공격 프레임)
 export type Frame = { board: number[]; flash: number[]; hit: number; hurt: number; chain: number; ms: number }
 
-// 연쇄: n 번째 연쇄는 ×(1 + 0.5 × (n − 1)). frames = 반짝임 → 사라짐 → 한 칸씩 낙하 를 연쇄마다
-export function resolve(start: number[], monEl: number) {
+// power = 장착 아이템의 공격 배수. 연쇄: n 번째 연쇄는 ×(1 + 0.5 × (n − 1)). frames = 반짝임 → 사라짐 → 한 칸씩 낙하 를 연쇄마다
+export function resolve(start: number[], monEl: number, power = 1) {
   let board = start
   let total = 0
   let chain = 0
@@ -123,7 +129,7 @@ export function resolve(start: number[], monEl: number) {
     const runs = findRuns(board)
     if (runs.length === 0) break
     chain += 1
-    const hit = Math.round(damageOf(runs, monEl) * (1 + 0.5 * (chain - 1)))
+    const hit = Math.round(damageOf(runs, monEl) * (1 + 0.5 * (chain - 1)) * power)
     total += hit
     const gone = new Set<number>()
     for (const run of runs) {
@@ -184,28 +190,147 @@ function newBoard(): number[] {
   }
 }
 
-// 느리게 때리는 몬스터일수록 한 방이 세다(턴당 피해는 비슷)
-function startStage(stage: number, best: number, php = PLAYER_HP): Game {
-  const maxHp = Math.round(300 * Math.pow(1.25, stage - 1))
-  const atkEvery = 2 + rnd(3)
+// ── 테마·스테이지 ─────────────────────────────────────────────
+// 난이도 순서: 물 → 불 → 나무 → 땅 → 전기. 값은 속성 번호
+export const THEMES = [0, 1, 3, 2, 4]
+export const STAGES = 7
+const BASE_HP = 100
+
+// 1(물 1) ~ 35(전기 7)
+const levelOf = (theme: number, stage: number) => theme * STAGES + stage
+
+export const rewardOf = (theme: number, stage: number) => 10 + 3 * levelOf(theme, stage)
+
+// ── 아이템 200종 = 수식어 40 × 종류 5 ─────────────────────────
+export const GRADE = ['일반', '고급', '희귀', '전설']
+// 뽑기 확률(%). 전설 10%
+export const GRADE_RATE = [50, 28, 12, 10]
+// 등급별 수식어 구간: 일반 16 · 고급 12 · 희귀 8 · 전설 4
+const GRADE_FROM = [0, 16, 28, 36, 40]
+const GRADE_POWER = [1, 2, 4, 8]
+// 이미 가진 아이템이 나오면 돌려받는 코인
+const REFUND = [10, 20, 40, 100]
+const PREFIX = [
+  '낡은', '무딘', '녹슨', '거친', '평범한', '가벼운', '단단한', '묵직한',
+  '손때 묻은', '수수한', '닳은', '투박한', '작은', '마른', '흔한', '오래된',
+  '잘 벼린', '윤나는', '튼튼한', '날렵한', '은빛', '푸른', '붉은', '정교한', '숙련자의', '맑은', '굳센', '빛나는',
+  '폭풍의', '서리의', '불꽃의', '대지의', '숲의', '번개의', '달빛의', '새벽의',
+  '용의', '별의', '태초의', '왕의',
+]
+// 검 = 공격, 방패 = 방어, 갑옷 = 체력, 반지 = 공격+체력, 부적 = 방어+체력
+const BASE = ['검', '방패', '갑옷', '반지', '부적']
+export const ITEM_COUNT = PREFIX.length * BASE.length
+export const SLOTS = 5
+export const PULL_COST = 60
+const PAGE = 6
+
+export type Item = { id: number; name: string; grade: number; atk: number; def: number; hp: number }
+
+export function itemOf(id: number): Item {
+  const p = Math.floor(id / BASE.length)
+  const kind = id % BASE.length
+  const grade = p < 16 ? 0 : p < 28 ? 1 : p < 36 ? 2 : 3
+  // 같은 등급 안에서도 뒤쪽 수식어가 조금 더 좋다
+  const m = (GRADE_POWER[grade] as number) * (1 + (p - (GRADE_FROM[grade] as number)) * 0.04)
+  const a = Math.round(6 * m)
+  const d = Math.max(1, Math.round(1.2 * m))
+  const h = Math.round(20 * m)
+  const part = (n: number) => Math.max(1, Math.round(n * 0.6))
+  const stat = [
+    { atk: a, def: 0, hp: 0 },
+    { atk: 0, def: d, hp: 0 },
+    { atk: 0, def: 0, hp: h },
+    { atk: part(a), def: 0, hp: part(h) },
+    { atk: 0, def: part(d), hp: part(h) },
+  ][kind] as { atk: number; def: number; hp: number }
+
+  return { id, name: `${PREFIX[p]} ${BASE[kind]}`, grade, ...stat }
+}
+
+// atk = 데미지 +%, def = 받는 피해 −, hp = 최대 체력 +
+export function statsOf(equip: number[]) {
+  const sum = { atk: 0, def: 0, hp: 0 }
+  for (const id of equip) {
+    const it = itemOf(id)
+    sum.atk += it.atk
+    sum.def += it.def
+    sum.hp += it.hp
+  }
+
+  return sum
+}
+
+const effect = (it: { atk: number; def: number; hp: number }) =>
+  [it.atk ? `공격 +${it.atk}%` : '', it.def ? `방어 +${it.def}` : '', it.hp ? `체력 +${it.hp}` : '']
+    .filter(Boolean)
+    .join(' · ')
+
+// n 번 뽑는다. 코인이 모자라면 아무 일도 없다. 이미 가진 아이템은 코인으로 돌려받는다
+export function gacha(game: Game, n: number, rand: () => number = Math.random): Game {
+  if (game.coins < PULL_COST * n) return { ...game, pulled: [], note: '코인이 부족합니다.' }
+  let coins = game.coins - PULL_COST * n
+  const owned = game.owned.slice()
+  const pulled: number[] = []
+  let back = 0
+  for (let k = 0; k < n; k++) {
+    let roll = rand() * 100
+    let grade = 0
+    while (grade < 3 && roll >= (GRADE_RATE[grade] as number)) {
+      roll -= GRADE_RATE[grade] as number
+      grade += 1
+    }
+    const from = (GRADE_FROM[grade] as number) * BASE.length
+    const count = ((GRADE_FROM[grade + 1] as number) - (GRADE_FROM[grade] as number)) * BASE.length
+    const id = from + Math.min(count - 1, Math.floor(rand() * count))
+    pulled.push(id)
+    if (owned.includes(id)) {
+      back += REFUND[grade] as number
+    } else {
+      owned.push(id)
+    }
+  }
+  coins += back
+
+  return { ...game, coins, owned, pulled, note: back ? `이미 가진 아이템은 코인 ${back} 으로 돌려받았습니다.` : '' }
+}
+
+export function toggleEquip(game: Game, id: number): Game {
+  if (game.equip.includes(id)) return { ...game, equip: game.equip.filter(e => e !== id), note: '' }
+  if (game.equip.length >= SLOTS) return { ...game, note: `장착은 ${SLOTS}개까지입니다. 먼저 하나를 빼세요.` }
+
+  return { ...game, equip: [...game.equip, id], note: '' }
+}
+
+// 가진 아이템: 등급 높은 순, 같은 등급은 번호 순
+const sortedOwned = (owned: number[]) =>
+  owned.slice().sort((a, b) => itemOf(b).grade - itemOf(a).grade || a - b)
+
+export function fresh(): Game {
+  return {
+    screen: 'menu', theme: 0, stage: 1,
+    board: [], sel: null, hp: 0, maxHp: 1, monEl: 0,
+    php: BASE_HP, pmaxHp: BASE_HP, atk: 0, atkEvery: 3, atkIn: 3,
+    log: '', over: false, won: false, flash: [], busy: false,
+    coins: 120, cleared: [0, 0, 0, 0, 0], owned: [], equip: [], page: 0, pulled: [], note: '',
+  }
+}
+
+// 전투 시작. 체력은 매 스테이지 가득 찬 채로 시작한다. 7번째는 보스
+export function startBattle(game: Game, theme: number, stage: number): Game {
+  const level = levelOf(theme, stage)
+  const maxHp = Math.round(110 * Math.pow(1.085, level - 1) * (stage === STAGES ? 1.5 : 1))
+  // 느리게 때리는 몬스터일수록 한 방이 세다(턴당 피해는 비슷)
+  const atkEvery = 3 + rnd(3)
+  const pmaxHp = BASE_HP + statsOf(game.equip).hp
 
   return {
-    board: newBoard(),
-    sel: null,
-    stage,
-    hp: maxHp,
-    maxHp,
-    monEl: rnd(KINDS),
-    php,
-    pmaxHp: PLAYER_HP,
-    atk: Math.round((5 + stage) * atkEvery),
-    atkEvery,
-    atkIn: atkEvery,
-    log: '돌을 누르고, 바로 옆 돌을 눌러 자리를 바꾸세요.',
-    best,
-    over: false,
-    flash: [],
-    busy: false,
+    ...game,
+    screen: 'battle', theme, stage,
+    board: newBoard(), sel: null, hp: maxHp, maxHp, monEl: THEMES[theme] as number,
+    php: pmaxHp, pmaxHp,
+    atk: Math.round((1.5 + 0.45 * level) * atkEvery), atkEvery, atkIn: atkEvery,
+    log: '돌을 누르고, 바로 옆 돌을 눌러 자리를 바꾸세요. 안 맞아도 그대로 남습니다.',
+    over: false, won: false, flash: [], busy: false, note: '',
   }
 }
 
@@ -217,21 +342,15 @@ export type Plan = { frames: Frame[]; final: Game }
 // 한 번 누른 결과: 재생할 프레임들과 최종 상태. 고르기만 한 경우 frames 는 비어 있다
 export function plan(game: Game, i: number): Plan {
   const still = (final: Game): Plan => ({ frames: [], final })
-  if (game.over || game.busy) return still(game)
+  if (game.screen !== 'battle' || game.over || game.won || game.busy) return still(game)
   if (game.sel === null) return still({ ...game, sel: i })
   if (game.sel === i) return still({ ...game, sel: null })
   if (!isNext(game.sel, i)) return still({ ...game, sel: i })
 
+  const gear = statsOf(game.equip)
+  // 줄이 안 맞아도 바꾼 자리는 그대로 둔다. 다음 수를 위한 준비도 한 턴이다
   const tried = swapped(game.board, game.sel, i)
-  if (findRuns(tried).length === 0) {
-    // 바꿨다가 되돌아오는 모습만 보여 준다. 턴은 쓰지 않는다
-    return {
-      frames: [{ board: tried, flash: [], hit: 0, hurt: 0, chain: 0, ms: 220 }],
-      final: { ...game, sel: null, log: '맞는 줄이 없어요. 가로·세로 3칸, 대각선 4칸 이상 이어지게 바꾸세요.' },
-    }
-  }
-
-  const done = resolve(tried, game.monEl)
+  const done = resolve(tried, game.monEl, 1 + gear.atk / 100)
   const frames: Frame[] = [{ board: tried, flash: [], hit: 0, hurt: 0, chain: 0, ms: 160 }, ...done.frames]
   const hp = Math.max(0, game.hp - done.total)
   const notes = [
@@ -239,27 +358,36 @@ export function plan(game: Game, i: number): Plan {
     done.hadCross ? '교차' : '',
     done.chain > 1 ? `${done.chain}연쇄` : '',
   ].filter(Boolean)
-  const hit = `${done.total} 데미지${notes.length ? ` (${notes.join(' · ')})` : ''}`
+  const hit =
+    done.total === 0
+      ? '자리만 바꿨어요'
+      : `${done.total} 데미지${notes.length ? ` (${notes.join(' · ')})` : ''}`
+  const rest = { ...game, board: done.board, sel: null, hp, flash: [], busy: false }
 
-  // 몬스터를 잡으면 공격받지 않고 다음 스테이지. 체력은 조금 회복한다
+  // 몬스터를 잡으면 공격받지 않는다. 처음 깬 스테이지는 보상 2배
   if (hp === 0) {
-    const best = Math.max(game.best, game.stage)
-    const php = Math.min(game.pmaxHp, game.php + 20)
-    const next = startStage(game.stage + 1, best, php)
+    const isFirst = (game.cleared[game.theme] ?? 0) < game.stage
+    const coins = rewardOf(game.theme, game.stage) * (isFirst ? 2 : 1)
+    const cleared = game.cleared.map((n, t) => (t === game.theme ? Math.max(n, game.stage) : n))
 
-    return { frames, final: { ...next, log: `${hit} — 스테이지 ${game.stage} 클리어! 체력 +${php - game.php}` } }
+    return {
+      frames,
+      final: {
+        ...rest, won: true, cleared, coins: game.coins + coins,
+        log: `${hit} — 클리어! 코인 +${coins}${isFirst ? ' (첫 클리어 2배)' : ''}`,
+      },
+    }
   }
 
-  // 돌을 한 번 맞출 때마다 몬스터 공격이 한 턴 가까워진다
-  const board = hasMove(done.board) ? done.board : newBoard()
-  const rest = { ...game, board, sel: null, hp, flash: [], busy: false }
+  // 돌을 한 번 옮길 때마다 몬스터 공격이 한 턴 가까워진다
   if (game.atkIn > 1) {
     return { frames, final: { ...rest, atkIn: game.atkIn - 1, log: hit } }
   }
 
-  const php = Math.max(0, game.php - game.atk)
-  frames.push({ board: done.board, flash: [], hit: 0, hurt: game.php - php, chain: -1, ms: 520 })
-  const struck = `${hit} → ${MONSTER[game.monEl]}의 공격! −${game.php - php}`
+  const hurt = Math.min(game.php, Math.max(1, game.atk - gear.def))
+  const php = game.php - hurt
+  frames.push({ board: done.board, flash: [], hit: 0, hurt, chain: -1, ms: 520 })
+  const struck = `${hit} → ${monsterOf(game)}의 공격! −${hurt}`
   if (php === 0) {
     return { frames, final: { ...rest, php, atkIn: 0, over: true, log: `${struck} — 쓰러졌습니다.` } }
   }
@@ -269,9 +397,32 @@ export function plan(game: Game, i: number): Plan {
 
 export const press = (game: Game, i: number): Game => plan(game, i).final
 
-const game = atom({ plugin: 'stone-clash', key: 'game' } as const, startStage(1, 0), {
-  shape: 'game-5',
+const monsterOf = (g: Game) => (MONSTER[g.monEl] as string[])[g.stage - 1] as string
+
+const game = atom({ plugin: 'stone-clash', key: 'game' } as const, fresh(), {
+  shape: 'game-6',
 })
+
+// 세션이 바뀌어도 남는 것: 코인·진행도·아이템·장착
+type Save = { coins: number; cleared: number[]; owned: number[]; equip: number[] }
+
+export function loaded(game: Game, raw: unknown): Game {
+  const s = raw as Partial<Save> | null | undefined
+  if (!s || typeof s.coins !== 'number' || !Array.isArray(s.cleared) || !Array.isArray(s.owned)) return game
+  const ids = (list: unknown) =>
+    (Array.isArray(list) ? list : []).filter(
+      (id): id is number => Number.isInteger(id) && id >= 0 && id < ITEM_COUNT,
+    )
+  const owned = ids(s.owned)
+
+  return {
+    ...game,
+    coins: Math.max(0, Math.floor(s.coins)),
+    cleared: THEMES.map((_, t) => Math.min(STAGES, Math.max(0, Number(s.cleared?.[t]) || 0))),
+    owned,
+    equip: ids(s.equip).filter(id => owned.includes(id)).slice(0, SLOTS),
+  }
+}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -279,9 +430,9 @@ export const register: Register = on => {
       name: 'stone-clash',
       description: '돌 맞추기 퍼즐 패널 열기',
     })
-    const best = Number((await $.store.get('best')) ?? 0)
+    const saved = await $.store.get('save')
     // 재생 도중 다시 로드되면 타이머가 사라지므로 잠금을 푼다
-    await update($, game, g => ({ ...g, best: Math.max(g.best, best), busy: false, flash: [] }))
+    await update($, game, g => ({ ...loaded(g, saved), busy: false, flash: [] }))
     void $.ui.open({ id: PANE, title: '돌 맞추기' })
 
     return next(e)
@@ -306,6 +457,168 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const g = await read($, game)
+
+    // 상태를 바꾸고, 남겨야 하는 값은 저장소에도 쓴다
+    const act = async (fn: (cur: Game) => Game) => {
+      await update($, game, fn)
+      const now = await read($, game)
+      await $.store.set('save', { coins: now.coins, cleared: now.cleared, owned: now.owned, equip: now.equip })
+    }
+    const go = (screen: Game['screen']) => act(cur => ({ ...cur, screen, note: '', pulled: [], page: 0 }))
+    const gear = statsOf(g.equip)
+    const gearLine = `공격 +${gear.atk}% · 방어 +${gear.def} · 체력 ${BASE_HP + gear.hp}`
+    const back = (screen: Game['screen'], label = '← 뒤로') => (
+      <Button key="back" label={label} onPress={() => go(screen)} />
+    )
+
+    if (g.screen === 'menu') {
+      const done = g.cleared.reduce((a, b) => a + b, 0)
+
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            <Text bold>돌 맞추기</Text>
+            <Text>
+              🪙 {g.coins} · 클리어 {done} / {THEMES.length * STAGES}
+            </Text>
+            <Text dimColor>{gearLine}</Text>
+          </Box>
+          <Box flexDirection="column">
+            <Button key="play" variant="primary" label="모험 (테마 선택)" onPress={() => go('themes')} />
+            <Button key="gacha" label={`뽑기 (1회 ${PULL_COST} 코인)`} onPress={() => go('gacha')} />
+            <Button key="bag" label={`가방 · 장착 ${g.equip.length}/${SLOTS} · 보유 ${g.owned.length}/${ITEM_COUNT}`} onPress={() => go('bag')} />
+          </Box>
+          <Text dimColor>스테이지를 깨면 코인을 받고, 코인으로 아이템을 뽑아 강해집니다. 진행은 자동 저장됩니다.</Text>
+        </Box>
+      )
+    }
+
+    if (g.screen === 'themes') {
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text bold>테마 선택 · 아래로 갈수록 어렵습니다</Text>
+          <Box flexDirection="column">
+            {THEMES.map((el, t) => (
+              <Button
+                key={`theme-${t}`}
+                label={`${STONE[el]} ${NAME[el]}의 땅 · ${g.cleared[t] ?? 0}/${STAGES} · 보상 ${rewardOf(t, 1)}~${rewardOf(t, STAGES)}`}
+                onPress={() => act(cur => ({ ...cur, screen: 'stages', theme: t }))}
+              />
+            ))}
+          </Box>
+          {back('menu')}
+        </Box>
+      )
+    }
+
+    if (g.screen === 'stages') {
+      const el = THEMES[g.theme] as number
+      const open = (g.cleared[g.theme] ?? 0) + 1
+      const list: number[] = []
+      for (let s = 1; s <= STAGES; s++) list.push(s)
+
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text bold>
+            {STONE[el]} {NAME[el]}의 땅 · 약점 {STONE[BEATS.indexOf(el)]} {NAME[BEATS.indexOf(el)]} (×1.5)
+          </Text>
+          <Box flexDirection="column">
+            {list.map(s => {
+              const name = `${s}. ${(MONSTER[el] as string[])[s - 1]}${s === STAGES ? ' (보스)' : ''}`
+              if (s > open) return <Text dimColor>🔒 {name}</Text>
+
+              return (
+                <Button
+                  key={`stage-${s}`}
+                  label={`${s < open ? '✓' : '▶'} ${name} · 🪙 ${rewardOf(g.theme, s) * (s < open ? 1 : 2)}`}
+                  onPress={() => act(cur => startBattle(cur, cur.theme, s))}
+                />
+              )
+            })}
+          </Box>
+          {back('themes')}
+        </Box>
+      )
+    }
+
+    if (g.screen === 'gacha') {
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            <Text bold>뽑기 · 🪙 {g.coins}</Text>
+            <Text dimColor>
+              {GRADE.map((name, k) => `${name} ${GRADE_RATE[k]}%`).join(' · ')} · 전체 {ITEM_COUNT}종
+            </Text>
+          </Box>
+          <Box flexDirection="column">
+            <Button key="pull-1" variant="primary" label={`1회 뽑기 (${PULL_COST})`} onPress={() => act(cur => gacha(cur, 1))} />
+            <Button key="pull-10" label={`10회 뽑기 (${PULL_COST * 10})`} onPress={() => act(cur => gacha(cur, 10))} />
+          </Box>
+          {g.pulled.length > 0 && (
+            <Box flexDirection="column">
+              {g.pulled.map(id => {
+                const it = itemOf(id)
+
+                return (
+                  <Text color={it.grade === 3 ? 'warning' : it.grade === 2 ? 'success' : undefined} bold={it.grade === 3}>
+                    [{GRADE[it.grade]}] {it.name} · {effect(it)}
+                  </Text>
+                )
+              })}
+            </Box>
+          )}
+          {g.note !== '' && <Text>{g.note}</Text>}
+          <Box flexDirection="column">
+            <Button key="to-bag" label="가방에서 장착하기" onPress={() => go('bag')} />
+            {back('menu')}
+          </Box>
+        </Box>
+      )
+    }
+
+    if (g.screen === 'bag') {
+      const all = sortedOwned(g.owned)
+      const pages = Math.max(1, Math.ceil(all.length / PAGE))
+      const page = Math.min(g.page, pages - 1)
+
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            <Text bold>
+              가방 · 장착 {g.equip.length}/{SLOTS}
+            </Text>
+            <Text dimColor>{gearLine}</Text>
+          </Box>
+          {all.length === 0 ? (
+            <Text dimColor>아직 아이템이 없습니다. 뽑기에서 얻을 수 있습니다.</Text>
+          ) : (
+            <Box flexDirection="column">
+              {all.slice(page * PAGE, page * PAGE + PAGE).map(id => {
+                const it = itemOf(id)
+
+                return (
+                  <Button
+                    key={`item-${id}`}
+                    label={`${g.equip.includes(id) ? '● ' : '○ '}[${GRADE[it.grade]}] ${it.name} · ${effect(it)}`}
+                    onPress={() => act(cur => toggleEquip(cur, id))}
+                  />
+                )
+              })}
+            </Box>
+          )}
+          <Text dimColor>누르면 장착 ● / 해제 ○ · {page + 1}/{pages} 쪽</Text>
+          {g.note !== '' && <Text color="warning">{g.note}</Text>}
+          <Box flexDirection="column">
+            {pages > 1 && (
+              <Button key="page-next" label="다음 쪽" onPress={() => act(cur => ({ ...cur, page: (page + 1) % pages }))} />
+            )}
+            {back('menu')}
+          </Box>
+        </Box>
+      )
+    }
+
+    // ── 전투 ──
     const filled = Math.round((g.hp / g.maxHp) * 20)
 
     const onCell = async (i: number) => {
@@ -323,8 +636,7 @@ export const register: Register = on => {
       const play = async (n: number) => {
         const frame = frames[n]
         if (!frame) {
-          await update($, game, () => final)
-          if (final.best > before.best) await $.store.set('best', final.best)
+          await act(() => final)
 
           return
         }
@@ -333,7 +645,7 @@ export const register: Register = on => {
         const shown = { hp, php }
         const log =
           frame.hurt > 0
-            ? `${MONSTER[before.monEl]}의 공격! −${frame.hurt}`
+            ? `${monsterOf(before)}의 공격! −${frame.hurt}`
             : frame.chain <= 0
               ? '…'
               : frame.chain > 1
@@ -353,8 +665,10 @@ export const register: Register = on => {
       }
       await play(0)
     }
-    const retry = () => update($, game, cur => startStage(1, cur.best))
     const mine = Math.round((g.php / g.pmaxHp) * 20)
+    // 이 몬스터를 이기는 속성
+    const weak = BEATS.indexOf(g.monEl)
+    const hasNext = g.stage < STAGES
 
     const rows: number[] = []
     for (let r = 0; r < N; r++) rows.push(r)
@@ -363,17 +677,20 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
           <Text bold>
-            스테이지 {g.stage} · {MONSTER[g.monEl]} {STONE[g.monEl]}
+            {NAME[g.monEl]} {g.stage}/{STAGES} · {monsterOf(g)} {STONE[g.monEl]}
           </Text>
           <Text>
             <Text color="error">{'█'.repeat(filled)}</Text>
             <Text dimColor>{'░'.repeat(20 - filled)}</Text> {g.hp} / {g.maxHp}
           </Text>
           <Text color={g.atkIn <= 1 ? 'warning' : undefined} bold={g.atkIn <= 1}>
-            {g.over ? '공격함' : g.atkIn <= 1 ? '다음 턴에 공격!' : `${g.atkIn}턴 뒤 공격`} · 공격력 {g.atk} ·{' '}
-            {g.atkEvery}턴마다
+            {g.over ? '공격함' : g.won ? '쓰러뜨림' : g.atkIn <= 1 ? '다음 턴에 공격!' : `${g.atkIn}턴 뒤 공격`} · 공격력{' '}
+            {g.atk} · {g.atkEvery}턴마다
           </Text>
-          <Text dimColor>약점 {NAME[BEATS.indexOf(g.monEl)]} · 최고 스테이지 {g.best}</Text>
+          <Text color="success" bold>
+            약점 {STONE[weak]} {NAME[weak]} — {STONE[weak]} 돌을 맞추면 데미지 ×1.5
+          </Text>
+          <Text dimColor>{gearLine}</Text>
         </Box>
         <Box flexDirection="column">
           {rows.map(r => (
@@ -403,7 +720,16 @@ export const register: Register = on => {
           <Text dimColor>{'░'.repeat(20 - mine)}</Text> {g.php} / {g.pmaxHp}
         </Text>
         <Text>{g.log}</Text>
-        {g.over && <Button key="retry" variant="primary" label="처음부터 다시" onPress={retry} />}
+        <Box flexDirection="column">
+          {g.won && hasNext && (
+            <Button key="next" variant="primary" label="다음 스테이지" onPress={() => act(cur => startBattle(cur, cur.theme, cur.stage + 1))} />
+          )}
+          {g.over && (
+            <Button key="retry" variant="primary" label="다시 도전" onPress={() => act(cur => startBattle(cur, cur.theme, cur.stage))} />
+          )}
+          {!g.busy && back('stages', g.won || g.over ? '스테이지 목록' : '포기하고 나가기')}
+          {(g.won || g.over) && <Button key="menu" label="메인 메뉴" onPress={() => go('menu')} />}
+        </Box>
         <Text dimColor>
           가로·세로 3칸 · 대각선 4칸부터 · 4칸 ×2 · 5칸 ×3 · 교차 ×2 · 연쇄마다 +50% · 약점 ×1.5{'\n'}
           물🔵 › 불🔴 › 나무🟢 › 땅🟤 › 전기🟡 › 물

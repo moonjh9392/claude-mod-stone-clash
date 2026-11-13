@@ -1,7 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Game } from '../types'
-import { damageOf, findRuns, hasMove, plan, press, resolve } from './register'
+import {
+  damageOf, findRuns, fresh, gacha, GRADE_RATE, hasMove, ITEM_COUNT, itemOf, loaded, plan, press, PULL_COST,
+  resolve, rewardOf, startBattle, statsOf, toggleEquip,
+} from './register'
 
 const PANE = {
   plugin: 'stone-clash',
@@ -79,9 +82,9 @@ const ready = () => {
   return b
 }
 const base: Game = {
-  board: ready(), sel: null, stage: 1, hp: 100000, maxHp: 100000, monEl: 2,
+  ...fresh(), screen: 'battle', theme: 3, stage: 2,
+  board: ready(), hp: 100000, maxHp: 100000, monEl: 2,
   php: 100, pmaxHp: 100, atk: 18, atkEvery: 3, atkIn: 3,
-  log: '', best: 0, over: false, flash: [], busy: false,
 }
 const hitOnce = (g: Game) => plan(press({ ...g, board: ready() }, at(0, 2)), at(1, 2))
 
@@ -98,10 +101,13 @@ test('돌을 맞추면 데미지가 들어가고 공격 턴이 가까워진다',
   expect(p.frames.reduce((a, f) => a + f.hurt, 0)).toBe(0)
   // 재생 중에는 입력을 받지 않는다
   expect(plan({ ...base, busy: true }, 2).final.sel).toBe(null)
-  // 맞지 않는 교환은 되돌아오는 프레임 하나, 턴은 그대로
-  const back = plan(press({ ...base, board: quiet() }, 0), 1)
-  expect(back.frames.length).toBe(1)
-  expect(back.final.atkIn).toBe(3)
+  // 맞지 않는 교환도 바꾼 자리에 남고 턴을 쓴다
+  const q = quiet()
+  const kept = plan(press({ ...base, board: q }, 0), 1)
+  expect(kept.final.board[0]).toBe(q[1])
+  expect(kept.final.board[1]).toBe(q[0])
+  expect(kept.final.hp).toBe(100000)
+  expect(kept.final.atkIn).toBe(2)
   expect(resolve(quiet(), 2).total).toBe(0)
 })
 
@@ -119,23 +125,102 @@ test('3턴 몬스터는 세 번째 맞춤 뒤에 공격한다', async () => {
   expect(dead.php).toBe(0)
   expect(dead.over).toBe(true)
   expect(press(dead, 5).sel).toBe(null)
-  // 공격 턴에 몬스터를 잡으면 맞지 않고 다음 스테이지, 체력 회복
-  const win = hitOnce({ ...base, hp: 1, php: 50, atkIn: 1 }).final
-  expect(win.stage).toBe(2)
-  expect(win.php).toBe(70)
-  expect(win.best).toBe(1)
+  // 공격 턴에 몬스터를 잡으면 맞지 않고 클리어. 첫 클리어는 보상 2배, 다시 깨면 1배
+  const win = hitOnce({ ...base, hp: 1, php: 50, atkIn: 1, cleared: [0, 0, 0, 1, 0] }).final
+  expect(win.won).toBe(true)
+  expect(win.php).toBe(50)
+  expect(win.cleared.join()).toBe('0,0,0,2,0')
+  expect(win.coins).toBe(base.coins + rewardOf(3, 2) * 2)
+  expect(press(win, 5).sel).toBe(null)
+  const again = hitOnce({ ...base, hp: 1, cleared: [0, 0, 0, 7, 0] }).final
+  expect(again.coins).toBe(base.coins + rewardOf(3, 2))
 })
 
-test('패널이 36칸과 몬스터를 그린다', async ($, on) => {
+test('아이템 200종·뽑기·장착·저장', async () => {
+  expect(ITEM_COUNT).toBe(200)
+  const grades = [0, 0, 0, 0]
+  const names = new Set<string>()
+  for (let id = 0; id < ITEM_COUNT; id++) {
+    const it = itemOf(id)
+    grades[it.grade] = (grades[it.grade] as number) + 1
+    names.add(it.name)
+    expect(it.atk + it.def + it.hp > 0).toBe(true)
+  }
+  expect(grades.join()).toBe('80,60,40,20')
+  expect(names.size).toBe(200)
+  expect(GRADE_RATE[3]).toBe(10)
+  // 등급이 높을수록 좋다
+  expect(itemOf(199 - 4).atk > itemOf(175).atk).toBe(true)
+  expect(itemOf(175).atk > itemOf(135).atk).toBe(true)
+  expect(itemOf(135).atk > itemOf(75).atk).toBe(true)
+
+  // 굴림 0.95 → 전설, 0.1 → 일반. 코인이 모자라면 그대로
+  const rolls = (list: number[]) => () => list.shift() ?? 0
+  const rich = { ...fresh(), coins: 1000 }
+  const one = gacha(rich, 1, rolls([0.95, 0]))
+  expect(one.coins).toBe(1000 - PULL_COST)
+  expect(itemOf(one.pulled[0] as number).grade).toBe(3)
+  expect(one.owned.length).toBe(1)
+  expect(itemOf(gacha(rich, 1, rolls([0.1, 0])).pulled[0] as number).grade).toBe(0)
+  // 같은 아이템이 또 나오면 코인으로 돌려받는다
+  const dup = gacha(one, 1, rolls([0.95, 0]))
+  expect(dup.owned.length).toBe(1)
+  expect(dup.coins).toBe(1000 - PULL_COST * 2 + 100)
+  expect(gacha({ ...fresh(), coins: 10 }, 1).owned.length).toBe(0)
+  expect(gacha(rich, 10).pulled.length).toBe(10)
+
+  // 장착은 5개까지, 다시 누르면 해제
+  let g = { ...fresh(), owned: [180, 181, 182, 183, 184, 185] }
+  for (const id of g.owned) g = toggleEquip(g, id)
+  expect(g.equip.length).toBe(5)
+  expect(toggleEquip(g, 180).equip.length).toBe(4)
+  const gear = statsOf(g.equip)
+  expect(gear.atk > 0 && gear.def > 0 && gear.hp > 0).toBe(true)
+  // 장착 효과: 체력이 늘고, 데미지가 늘고, 받는 피해가 준다
+  const fight = startBattle(g, 0, 1)
+  expect(fight.pmaxHp).toBe(100 + gear.hp)
+  expect(fight.monEl).toBe(0)
+  const plain = hitOnce(base)
+  const strong = hitOnce({ ...base, equip: g.equip })
+  expect(100000 - strong.final.hp > 100000 - plain.final.hp).toBe(true)
+  const hurt = hitOnce({ ...base, equip: g.equip, atkIn: 1 }).final
+  expect(100 - hurt.php).toBe(Math.max(1, 18 - gear.def))
+  // 1스테이지는 쉽고, 뒤로 갈수록 세다
+  expect(startBattle(fresh(), 0, 1).maxHp).toBe(110)
+  expect(startBattle(fresh(), 4, 7).maxHp > 2000).toBe(true)
+
+  // 저장한 값을 다시 읽는다. 이상한 값은 버린다
+  const back = loaded(fresh(), { coins: 77, cleared: [7, 3, 0, 0, 0], owned: [1, 999, 5], equip: [5, 9] })
+  expect(back.coins).toBe(77)
+  expect(back.cleared.join()).toBe('7,3,0,0,0')
+  expect(back.owned.join()).toBe('1,5')
+  expect(back.equip.join()).toBe('5')
+  expect(loaded(fresh(), 3).coins).toBe(fresh().coins)
+})
+
+test('메뉴에서 테마·스테이지를 골라 36칸 판에 들어간다', async ($, on) => {
   on('command.register', () => ({ value: { command: 'stone-clash' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('store.get', () => ({ value: 3 }))
+  on('store.get', () => ({ value: { coins: 500, cleared: [2, 0, 0, 0, 0], owned: [3], equip: [3] } }))
+  on('store.set', () => ({ value: undefined }))
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /스테이지 1/ })) !== undefined).toBe(true)
-  expect((await ui.find({ type: 'Text', text: /최고 스테이지 3/ })) !== undefined).toBe(true)
+  expect((await ui.find({ type: 'Text', text: /🪙 500 · 클리어 2 \/ 35/ })) !== undefined).toBe(true)
+  await ui.press({ key: 'gacha' })
+  await ui.press({ key: 'pull-1' })
+  expect((await ui.find({ type: 'Text', text: /🪙 440/ })) !== undefined).toBe(true)
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'bag' })
+  await ui.press({ key: 'item-3' })
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'play' })
+  await ui.press({ key: 'theme-0' })
+  await ui.press({ key: 'stage-3' })
+  expect((await ui.find({ type: 'Text', text: /물안개 해파리/ })) !== undefined).toBe(true)
+  // 물 몬스터의 약점은 전기
+  expect((await ui.find({ type: 'Text', text: /약점 🟡 전기/ })) !== undefined).toBe(true)
   await ui.press({ key: 'cell-0' })
   await ui.press({ key: 'cell-35' })
   await ui.unmount()
